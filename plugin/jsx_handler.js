@@ -1,57 +1,51 @@
-var processFiles = function(files) {
-  files.forEach(processFile);
-};
-
-var processFile = function(file) {
-  var source = file.getContentsAsString();
-  var packageName = file.getPackageName();
-  var inputFile = file.getPathInPackage();
-  var moduleId = inputFile.split('.jsx')[0];
-  var outputFile = moduleId + '.js';
-
-  if (packageName) {
-    moduleId = '{' + packageName + '}/' + moduleId;
+class JsxCompiler extends Compiler {
+  constructor() {
+    super('jsx-compiler');
   }
 
-  var result;
-  var extraWhitelist = [
-    'es6.modules',
-    'es7.decorators'
-  ];
+  compileResultSize(result) {
+    return result.code.length;
+  }
 
-  try {
-    result = Babel.transformMeteor(source, {
-      sourceMap: true,
-      filename: file.getDisplayPath(),
-      sourceMapName: file.getDisplayPath(),
-      extraWhitelist: extraWhitelist,
-      modules: 'system',
-      moduleIds: true,
-      moduleId: moduleId
-    });
-  } catch (e) {
-    if (e.loc) {
+  compileOneFile(file) {
+    try {
+      var extraWhitelist = [
+        'es6.modules',
+        'es7.decorators'
+      ];
+
+      return Babel.transformMeteor(file.getContentsAsString(), {
+        sourceMap: true,
+        filename: file.getDisplayPath(),
+        sourceMapName: file.getDisplayPath(),
+        extraWhitelist: extraWhitelist,
+        modules: 'system',
+        moduleIds: true,
+        moduleId: file.getPackagePrefixedModule()
+      });
+    }
+    catch (e) {
+      // Other error
+      if (!e.loc) throw e;
+
+      // Linting error
       file.error({
         message: e.message,
-        sourcePath: inputFile,
+        sourcePath: file.getPackagePrefixedPath('log'),
         line: e.loc.line,
         column: e.loc.column
       });
-      return;
     }
-    throw e;
   }
 
-  file.addJavaScript({
-    path: outputFile,
-    data: result.code
-  });
-};
+  addCompileResult(file, result) {
+    file.addJavaScript({
+      data: result.code,
+      path: file.getPackagePrefixedModule() + '.js'
+    });
+  }
+}
 
 Plugin.registerCompiler({
   extensions: ['jsx'],
-  filenames: []
-
-}, function() {
-  return { processFilesForTarget: processFiles };
-});
+}, () => new JsxCompiler());

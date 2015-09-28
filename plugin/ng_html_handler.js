@@ -1,74 +1,89 @@
 var $ = Npm.require('cheerio');
-var uglify = Npm.require('uglify-js');
 
-var processFiles = function(files) {
-  files.forEach(function(file) {
-    if (file.getBasename() == 'index.html')
-      processIndex(file);
+class HtmlExtensionCompiler extends Compiler {
+  constructor() {
+    super('html-extension-compiler');
+  }
+
+  compileResultSize(result) {
+    return result.head.length + result.body.length;
+  }
+
+  compileOneFile(file) {
+    var $contents = $(file.getContentsAsString());
+    var $head = $contents.closest('head');
+    var $body = $contents.closest('body');
+
+    return {
+      head: $head.html() || '',
+      body: $body.html() || ''
+    };
+  }
+
+  addCompileResult(file, result) {
+    file.addHtml({
+      data: result.head,
+      section: 'head'
+    });
+
+    file.addHtml({
+      data: result.body,
+      section: 'body'
+    });
+  }
+}
+
+class NgTemplateCompiler extends Compiler {
+  constructor() {
+    super('ng-template-compiler');
+  }
+
+  compileResultSize(result) {
+    return result.length;
+  }
+
+  compileOneFile(file) {
+    return file.getContentsAsString();
+  }
+
+  addCompileResult(file, result) {
+    file.addAsset({
+      data: result,
+      path: file.getPackagePrefixedPath()
+    });
+  }
+}
+
+var processFilesForTarget = (files) => {
+  var extensionFiles = [];
+  var templateFiles = [];
+
+  files.forEach((file) => {
+    var $contents = $(file.getContentsAsString());
+    var isExtension = $contents.closest('head,body').length;
+    var isTemplate = $contents.closest(':not(head,body)').length;
+
+    if (isExtension && isTemplate)
+      throw Error(file.getNameInPackage() + ' can\'t contain <head> or <body> tags with other tags in top level of template');
+
+    if (isExtension)
+      extensionFiles.push(file);
     else
-      processTemplate(file);
-  });
-};
-
-var processIndex = function(file) {
-  var $contents = $(file.getContentsAsString());
-  var $head = $contents.closest('head');
-  var $body = $contents.closest('body');
-  var $script = $('<script>').text(minifyJs(script));
-  
-  if (!$head.length) {
-    $head = $('<head>');
-  }
-
-  if (!$body.length) {
-    $body = $('<body>').append($contents.filter(':not(head)'));
-  }
-
-  $head.prepend($script);
-
-  file.addHtml({
-    data: minifyHtml($head.html()),
-    path: file.getDirname() + '/head.html',
-    section: 'head'
+      templateFiles.push(file);
   });
 
-  file.addHtml({
-    data: minifyHtml($body.html()),
-    path: file.getDirname() + '/body.html',
-    section: 'body'
-  });
-};
+  // Pops the default layout file if a costume layout was found
+  if (extensionFiles.length > 1)
+    extensionFiles.some((file, i) =>
+      file.getPackageName() == 'barbatus:angular2' && extensionFiles.splice(i, 1)
+    );
 
-var processTemplate = function(file) {
-  file.addAsset({
-    path: file.getPathInPackage(),
-    data: minifyHtml(file.getContentsAsString())
-  });
-};
-
-var script = function() {
-  System.import('client/app');
-};
-
-var minifyHtml = function(html) {
-  // Try parsing the html to make sure it is valid before minification
-  HTMLTools.parseFragment(html);
-  // TODO: For now there are no proper minifiers for angular2 templates,
-  // a parsing error will be thrown on a minification attemp since templates are illigal.
-  // Wait for a proper angular2 minifier.
-  return html;
-};
-
-var minifyJs = function(js) {
-  return uglify.minify('(' + js.toString() + ')()', {
-    fromString: true
-  }).code;
+  new HtmlExtensionCompiler().processFilesForTarget(extensionFiles);
+  new NgTemplateCompiler().processFilesForTarget(templateFiles);
 };
 
 Plugin.registerCompiler({
   extensions: ['html'],
-  filenames: []
-
-}, function() {
-  return { processFilesForTarget: processFiles };
+}, () => {
+  return { processFilesForTarget };
 });

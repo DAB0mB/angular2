@@ -1,72 +1,80 @@
 var ts = Npm.require('typescript');
 
-var processFiles = function(files) {
-  files.forEach(processFile);
+var compilerOptions = {
+  module : ts.ModuleKind.System,
+  target: ts.ScriptTarget.ES5,
+  experimentalDecorators: true,
+  diagnostics: true
 };
 
-// TS declaration file regex.
-var dFileRegex = /^.*\.d\.ts$/;
-
-var processFile = function(file) {
-  var source = file.getContentsAsString();
-  var inputFile = file.getPathInPackage();
-  var moduleId = inputFile.split('.ts')[0];
-  var outputFile = moduleId + '.js';
-
-  // If it's a declaration file then
-  // skip compilation and add an asset.
-  if (dFileRegex.test(inputFile)) {
-    file.addAsset({
-      path: inputFile,
-      data: source
-    });
-    return;
+class TsCompiler extends Compiler {
+  constructor() {
+    super('ts-compiler');
   }
 
-  var options = {
-    module : ts.ModuleKind.System,
-    target: ts.ScriptTarget.ES5,
-    experimentalDecorators: true,
-    diagnostics: true
-  };
-  var diagnostics = [];
-  // This returns only Syntactic diagnostics which is usually empty.
-  var result = ts.transpile(source, options, inputFile, diagnostics, moduleId);
+  compileResultSize(result) {
+    return result.data.length;
+  }
 
-  // Outputs extended diagnostics.
-  logErrors(inputFile, options);
+  compileOneFile(file) {
+    var contents = file.getContentsAsString();
 
-  file.addJavaScript({
-    path : outputFile,
-    data : result
-  });
-};
+    if (isDeclerationFile(file))
+      return {
+        type: 'd',
+        data: contents,
+        path: file.getPackagePrefixedPath()
+      };
 
-var logErrors = function(inputPath, compilerOptions) {
-  var program = ts.createProgram([inputPath], compilerOptions);
+    var diagnostics = [];
+    var path = file.getPathInPackage();
+    var moduleName = file.getModuleName();
+    var result = ts.transpile(contents, compilerOptions, path, diagnostics, moduleName);
+    diagnose(file);
 
-  var sourceFile = program.getSourceFile(inputPath);
+    return {
+      type: 'ts',
+      data: result,
+      path: moduleName + '.js'
+    };
+  }
+
+  addCompileResult(file, result) {
+    var type = result.type;
+    delete result.type;
+
+    switch (type) {
+      case 'd': return file.addAsset(result);
+      case 'ts': return file.addJavaScript(result);
+    }
+  }
+}
+
+var diagnose = (file) => {
+  var path = file.getPathInPackage();
+  var program = ts.createProgram([path], compilerOptions);
+  var sourceFile = program.getSourceFile(path);
   var syntacticDiagnostics = program.getSyntacticDiagnostics(sourceFile, null);
   var semanticDiagnostics = program.getSemanticDiagnostics(sourceFile, null);
   var diagnostics = syntacticDiagnostics.concat(semanticDiagnostics);
-  for (var i = 0; i < diagnostics.length; i++) {
-    var diagnostic = diagnostics[i];
-    if (!diagnostic.file) continue;
+
+  diagnostics.forEach((diagnostic) => {
+    if (!diagnostic.file) return;
 
     var pos = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
-    var errorMessage = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+    var message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+    var sourcePath = file.getPackagePrefixedPath('log');
     var line = pos.line + 1;
-    var character = pos.character + 1;
-    var message = diagnostic.file.fileName + ' (' + line + ', ' + character + '): ' +
-      errorMessage;
-    console.warn(message);
-  }
+    var column = pos.character + 1;
+
+    console.warn({message, sourcePath, line, column});
+  });
+};
+
+var isDeclerationFile = (file) => {
+  return file.getPathInPackage().match(/^.*\.d\.ts$/);
 };
 
 Plugin.registerCompiler({
   extensions: ['ts'],
-  filenames: []
-
-}, function() {
-  return { processFilesForTarget: processFiles };
-});
+}, () => new TsCompiler());
